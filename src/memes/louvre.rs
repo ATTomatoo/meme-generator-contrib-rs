@@ -36,7 +36,7 @@ fn make_gradient(width: i32, height: i32) -> Result<Image, Error> {
     let mut surface = new_surface((width, height));
     let canvas = surface.canvas();
 
-    // 颜色数组，平均分布（不显式传 positions，避免类型转换）
+    // 颜色数组，平均分布（转换为切片以符合 API 要求）
     let colors: [Color4f; 6] = [
         Color4f::new(0.984, 0.729, 0.188, 1.0),
         Color4f::new(0.988, 0.447, 0.207, 1.0),
@@ -46,10 +46,10 @@ fn make_gradient(width: i32, height: i32) -> Result<Image, Error> {
         Color4f::new(0.243, 0.713, 0.854, 1.0),
     ];
 
-    // linear_gradient 的签名通常为 (points, colors_slice, pos_option, tile_mode, flags_option, local_matrix_option)
+    // linear_gradient 需要切片而不是数组引用
     let shader = Shader::linear_gradient(
         ((0.0f32, 0.0f32), (width as f32, height as f32)),
-        &colors,
+        &colors[..],          // 转换为切片
         None,                 // positions (None => 平均分布)
         TileMode::Clamp,      // tile mode
         None,                 // flags
@@ -66,10 +66,9 @@ fn make_gradient(width: i32, height: i32) -> Result<Image, Error> {
 
 fn louvre(images: Vec<InputImage>, _texts: Vec<String>, options: Louvre) -> Result<Vec<u8>, Error> {
     // 直接消费 images vec，取第一个 InputImage 并转换为 skia Image
-    // 注意：不同版本的 InputImage 可能命名为 into_image()/as_image()/to_image() 等，
-    // 我先尝试常见的 into_image()。如果你的版本不是这个名字，请把编译错误贴上来。
     let first_input = images.into_iter().next().unwrap();
-    let base: Image = first_input.into_image()?; // 若报错 "no method into_image"，我会根据错误改成正确的方法名
+    let base: Image = first_input.to_image()?; // 使用 to_image() 而不是 into_image()
+
     let size = base.dimensions();
     let (w, h) = (size.width, size.height);
 
@@ -82,7 +81,7 @@ fn louvre(images: Vec<InputImage>, _texts: Vec<String>, options: Louvre) -> Resu
     // 蒙版
     let mask = make_mask(&base, &pencil, options.denoise.unwrap_or(false))?;
 
-    // 合成结果：先画 gradient，再把 mask 作为一层绘制（如需按 mask 做 alpha-clipping，请说明）
+    // 合成结果：先画 gradient，再把 mask 作为一层绘制
     let mut surface = new_surface((w, h));
     let canvas = surface.canvas();
     canvas.draw_image(&gradient, (0, 0), None);
@@ -90,9 +89,9 @@ fn louvre(images: Vec<InputImage>, _texts: Vec<String>, options: Louvre) -> Resu
 
     let result = surface.image_snapshot();
 
-    // 注意：某些 skia-safe 版本会对 encode_to_data 发出需要 context 的警告；这是警告不是错误。
+    // 使用新的 encode_to_data_with_context API 避免弃用警告
     let png_data = result
-        .encode_to_data(EncodedImageFormat::PNG)
+        .encode_to_data_with_context(None, EncodedImageFormat::PNG, 100)
         .unwrap();
 
     Ok(png_data.as_bytes().to_vec())
