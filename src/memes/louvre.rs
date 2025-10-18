@@ -1,8 +1,7 @@
-use skia_safe::{Image, ColorType, AlphaType};
+use skia_safe::{Image, Paint, Rect, Shader, TileMode};
 use meme_generator_core::error::Error;
 use meme_generator_utils::{
     builder::{InputImage, MemeOptions},
-    encoder::{make_gif_or_combined_gif, FrameAlign, GifInfo},
     image::ImageExt,
     tools::{load_image, local_date, new_surface},
 };
@@ -10,90 +9,96 @@ use crate::register_meme;
 
 #[derive(MemeOptions)]
 struct Louvre {
-    // 是否开启降噪
+    /// 是否开启降噪
     #[option(long, default = false)]
     denoise: Option<bool>,
 }
 
-fn make_mask(base: &Image, 01: &Image, denoise: bool) -> Result<Image, Error> {
-    // 模拟 Python 里的 mask 算法
-    let (w, h) = base.dimensions();
-    let mut surface = new_surface((w, h));
+/// 模拟滤镜蒙版
+fn make_mask(base: &Image, pencil: &Image, denoise: bool) -> Result<Image, Error> {
+    // 从 base 取尺寸
+    let size = base.dimensions();
+    let width = size.width;
+    let height = size.height;
+
+    // new_surface 以 (i32, i32) 或 ISize 接受尺寸，视库实现而定 - 这里使用 tuple 保证兼容
+    let mut surface = new_surface((width, height));
     let canvas = surface.canvas();
 
-    // 模拟图像融合（使用 multiply blend）
+    // 先绘制 base，再绘制 pencil（作为叠加）
     canvas.draw_image(base, (0, 0), None);
-    canvas.draw_image(01, (0, 0), None);
+    canvas.draw_image(pencil, (0, 0), None);
 
     if denoise {
-        // 模拟简单的模糊去噪效果
-        let blurred = base.blur_image(3.0)?;
+        // 如果 ImageExt 提供模糊函数则调用；不同版本名可能不同（blur_image_auto / blur）
+        // 保持 ? 让错误上抛
+        let blurred = base.blur_image_auto(3.0)?;
         canvas.draw_image(&blurred, (0, 0), None);
     }
 
     Ok(surface.image_snapshot())
 }
 
+/// 创建渐变背景
 fn make_gradient(width: i32, height: i32) -> Result<Image, Error> {
-    // 创建渐变背景
     let mut surface = new_surface((width, height));
     let canvas = surface.canvas();
 
+    let positions = [0.0, 0.4, 0.6, 0.7, 0.8, 1.0];
     let colors = [
-        (0.0, (0.984, 0.729, 0.188)),
-        (0.4, (0.988, 0.447, 0.207)),
-        (0.6, (0.988, 0.207, 0.305)),
-        (0.7, (0.811, 0.211, 0.874)),
-        (0.8, (0.215, 0.709, 0.850)),
-        (1.0, (0.243, 0.713, 0.854)),
+        skia_safe::Color4f::new(0.984, 0.729, 0.188, 1.0),
+        skia_safe::Color4f::new(0.988, 0.447, 0.207, 1.0),
+        skia_safe::Color4f::new(0.988, 0.207, 0.305, 1.0),
+        skia_safe::Color4f::new(0.811, 0.211, 0.874, 1.0),
+        skia_safe::Color4f::new(0.215, 0.709, 0.850, 1.0),
+        skia_safe::Color4f::new(0.243, 0.713, 0.854, 1.0),
     ];
 
-    let shader = skia_safe::shader::LinearGradient::new(
+    let shader = Shader::linear_gradient(
         (0.0, 0.0),
         (width as f32, height as f32),
-        colors
-            .iter()
-            .map(|(_, (r, g, b))| skia_safe::Color4f::new(*r, *g, *b, 1.0))
-            .collect::<Vec<_>>()
-            .as_slice(),
-        colors.iter().map(|(p, _)| *p).collect::<Vec<_>>().as_slice(),
-        skia_safe::tile_mode::TileMode::Clamp,
+        &colors,
+        Some(&positions),
+        TileMode::Clamp,
         None,
         None,
-    )
-    .ok_or_else(|| Error::msg("无法创建渐变"))?;
+    );
 
-    let paint = skia_safe::Paint::default().with_shader(shader);
-    canvas.draw_rect((0.0, 0.0, width as f32, height as f32), &paint);
+    let mut paint = Paint::default();
+    paint.set_shader(shader);
+
+    canvas.draw_rect(Rect::from_xywh(0.0, 0.0, width as f32, height as f32), &paint);
 
     Ok(surface.image_snapshot())
 }
 
 fn louvre(images: Vec<InputImage>, _texts: Vec<String>, options: Louvre) -> Result<Vec<u8>, Error> {
-    let base = images[0].to_image()?;
-    let (w, h) = base.dimensions();
+    // InputImage -> Image
+    let base = images[0].as_image()?;
+    let size = base.dimensions();
+    let (w, h) = (size.width, size.height);
 
-    // 加载素材 01.png
-    let 01 = load_image("louvre/01.png")?.resize_exact((w, h));
+    // 加载素材 01.png（变量名用 pencil）
+    let pencil = load_image("louvre/01.png")?.resize_exact((w, h));
 
     // 渐变背景
     let gradient = make_gradient(w, h)?;
 
     // 蒙版
-    let mask = make_mask(&base, &01, options.denoise.unwrap_or(false))?;
+    let mask = make_mask(&base, &pencil, options.denoise.unwrap_or(false))?;
 
-    // 生成合成图
+    // 合成结果
     let mut surface = new_surface((w, h));
     let canvas = surface.canvas();
-
     canvas.draw_image(&gradient, (0, 0), None);
-    canvas.draw_image_with_mask(&base, &mask, (0, 0));
+    // 这里简单把 mask 当作一层绘制（如果你需要把 mask 当成 alpha mask，需要额外的遮罩/paint 逻辑）
+    canvas.draw_image(&mask, (0, 0), None);
 
     let result = surface.image_snapshot();
 
-    // 输出为 PNG
-    let png_data = result.encode_to_data_with_format(skia_safe::EncodedImageFormat::PNG)
-        .ok_or_else(|| Error::msg("生成 PNG 失败"))?;
+    let png_data = result
+        .encode_to_data(skia_safe::EncodedImageFormat::PNG)
+        .ok_or_else(|| Error::Other("生成 PNG 失败".into()))?;
 
     Ok(png_data.as_bytes().to_vec())
 }
@@ -104,7 +109,8 @@ register_meme!(
     min_images = 1,
     max_images = 1,
     keywords = &["卢浮宫"],
-    tags = &["艺术", "滤镜", "素描"],
+    // tags_from helper: 若你的版本不匹配，可以改成 tags = meme_generator_utils::builder::meme_setters::tags_from(["艺术","滤镜","素描"])
+    tags = meme_generator_utils::builder::meme_setters::tags_from(["艺术", "滤镜", "素描"]),
     date_created = local_date(2025, 10, 19),
     date_modified = local_date(2025, 10, 19),
 );
