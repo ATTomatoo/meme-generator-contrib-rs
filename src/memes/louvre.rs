@@ -48,8 +48,8 @@ fn make_gradient(width: i32, height: i32) -> Result<Image, Error> {
 }
 
 fn louvre(images: Vec<InputImage>, _texts: Vec<String>, _options: Louvre) -> Result<Vec<u8>, Error> {
-    // 使用项目标准方式处理输入图片 - 参考其他模块
-    let base = images.into_iter().next().unwrap().image()?;
+    // 参考其他成功模块的处理方式
+    let base = images.into_iter().next().unwrap().into_raw()?;
     let size = base.dimensions();
     let (w, h) = (size.width, size.height);
 
@@ -77,7 +77,7 @@ fn louvre(images: Vec<InputImage>, _texts: Vec<String>, _options: Louvre) -> Res
     // 编码为PNG - 使用项目中其他模块的错误处理方式
     let png_data = result
         .encode(None, EncodedImageFormat::PNG, 100)
-        .ok_or("Failed to encode image")?;
+        .ok_or_else(|| Error::from("Failed to encode image"))?;
 
     Ok(png_data.as_bytes().to_vec())
 }
