@@ -76,9 +76,10 @@ fn louvre(images: Vec<InputImage>, _texts: Vec<String>, _options: Louvre) -> Res
     let result = surface.image_snapshot();
 
     // 编码为PNG - 使用项目中其他模块的错误处理方式
+    // 参考bite.rs和shoot.rs，它们使用unwrap()或直接返回
     let png_data = result
         .encode(None, EncodedImageFormat::PNG, 100)
-        .ok_or_else(|| "Failed to encode image".to_string())?;
+        .expect("Failed to encode image");
 
     Ok(png_data.as_bytes().to_vec())
 }
