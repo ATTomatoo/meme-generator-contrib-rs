@@ -48,18 +48,18 @@ fn make_gradient(width: i32, height: i32) -> Result<Image, Error> {
 }
 
 fn louvre(images: Vec<InputImage>, _texts: Vec<String>, _options: Louvre) -> Result<Vec<u8>, Error> {
-    // 使用和参考代码相同的方式处理输入图片
+    // 使用项目标准方式处理输入图片
     let base = images.into_iter().next().unwrap().to_image()?;
     let size = base.dimensions();
     let (w, h) = (size.width, size.height);
 
-    // 加载卢浮宫滤镜层（已改名为01.png）
+    // 加载滤镜层
     let filter = load_image("louvre/01.png")?.resize_exact((w, h));
 
     // 创建渐变背景
     let gradient = make_gradient(w, h)?;
 
-    // 创建结果表面
+    // 创建结果表面 - 参考其他模块的模式
     let mut surface = new_surface((w, h));
     let canvas = surface.canvas();
 
@@ -74,10 +74,10 @@ fn louvre(images: Vec<InputImage>, _texts: Vec<String>, _options: Louvre) -> Res
 
     let result = surface.image_snapshot();
 
-    // 编码为PNG - 使用和参考代码相同的错误处理方式
+    // 编码为PNG - 使用项目标准错误处理
     let png_data = result
         .encode(None, EncodedImageFormat::PNG, 100)
-        .ok_or_else(|| Error::from("Failed to encode image"))?;
+        .ok_or("Failed to encode image")?;
 
     Ok(png_data.as_bytes().to_vec())
 }
@@ -87,7 +87,7 @@ register_meme!(
     louvre,
     min_images = 1,
     max_images = 1,
-    keywords = &["卢浮宫", "艺术", "滤镜"],
+    keywords = &["卢浮宫"],
     tags = {
         let mut tags = HashSet::new();
         tags.insert("艺术".to_string());
