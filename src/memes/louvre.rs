@@ -4,6 +4,7 @@ use skia_safe::{Color4f, EncodedImageFormat, Image, Paint, Rect, Shader, TileMod
 use meme_generator_core::error::Error;
 use meme_generator_utils::{
     builder::{InputImage, MemeOptions},
+    encoder::make_png_or_gif,
     image::ImageExt,
     tools::{load_image, local_date, new_surface},
 };
@@ -48,40 +49,36 @@ fn make_gradient(width: i32, height: i32) -> Result<Image, Error> {
 }
 
 fn louvre(images: Vec<InputImage>, _texts: Vec<String>, _options: Louvre) -> Result<Vec<u8>, Error> {
-    // 参考bite.rs和shoot.rs的处理方式
-    let first_input = images.into_iter().next().unwrap();
-    let base = first_input.image;
-    let size = base.dimensions();
-    let (w, h) = (size.width, size.height);
+    let frame = load_image("louvre/01.png")?;
 
-    // 加载滤镜层
-    let filter = load_image("louvre/01.png")?.resize_exact((w, h));
+    let func = |images: Vec<Image>| {
+        let base = &images[0];
+        let size = base.dimensions();
+        let (w, h) = (size.width, size.height);
 
-    // 创建渐变背景
-    let gradient = make_gradient(w, h)?;
+        // 调整滤镜大小
+        let filter = frame.resize_exact((w, h));
 
-    // 创建结果表面
-    let mut surface = new_surface((w, h));
-    let canvas = surface.canvas();
+        // 创建渐变背景
+        let gradient = make_gradient(w, h)?;
 
-    // 绘制渐变背景
-    canvas.draw_image(&gradient, (0, 0), None);
-    
-    // 绘制原始图像
-    canvas.draw_image(&base, (0, 0), None);
-    
-    // 叠加滤镜效果
-    canvas.draw_image(&filter, (0, 0), None);
+        // 创建结果表面
+        let mut surface = new_surface((w, h));
+        let canvas = surface.canvas();
 
-    let result = surface.image_snapshot();
+        // 绘制渐变背景
+        canvas.draw_image(&gradient, (0, 0), None);
+        
+        // 绘制原始图像
+        canvas.draw_image(base, (0, 0), None);
+        
+        // 叠加滤镜效果
+        canvas.draw_image(&filter, (0, 0), None);
 
-    // 编码为PNG - 使用项目中其他模块的错误处理方式
-    // 参考bite.rs和shoot.rs，它们使用unwrap()或直接返回
-    let png_data = result
-        .encode(None, EncodedImageFormat::PNG, 100)
-        .expect("Failed to encode image");
+        Ok(surface.image_snapshot())
+    };
 
-    Ok(png_data.as_bytes().to_vec())
+    make_png_or_gif(images, func)
 }
 
 register_meme!(
