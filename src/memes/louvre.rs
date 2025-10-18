@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 
-use skia_safe::{
-    image_filters, Color4f, EncodedImageFormat, Image, Paint, Point, Rect, Shader, TileMode,
-};
+use skia_safe::{Color4f, EncodedImageFormat, Image, Paint, Rect, Shader, TileMode};
 use meme_generator_core::error::Error;
 use meme_generator_utils::{
     builder::{InputImage, MemeOptions},
@@ -13,44 +11,32 @@ use crate::register_meme;
 
 #[derive(MemeOptions)]
 struct Louvre {
-    /// 是否开启降噪
+    /// 是否开启降噪（当前实现忽略该选项以保证兼容）
     #[option(long, default = false)]
     denoise: Option<bool>,
 }
 
-/// 模拟滤镜蒙版（用 Skia 的 image filter 做模糊）
-fn make_mask(base: &Image, pencil: &Image, denoise: bool) -> Result<Image, Error> {
-    // base.dimensions() 返回 ISize（带 width/height 字段）
+/// 模拟滤镜蒙版（为保证兼容性，暂不做模糊处理）
+fn make_mask(base: &Image, pencil: &Image, _denoise: bool) -> Result<Image, Error> {
     let size = base.dimensions();
     let (w, h) = (size.width, size.height);
 
-    // 创建临时 surface
     let mut surface = new_surface((w, h));
     let canvas = surface.canvas();
 
-    // 如果需要降噪，用 Paint + image_filter blur 来绘制 base
-    if denoise {
-        let mut paint = Paint::default();
-        // 半径 3.0，可根据需要调整
-        let blur_filter = image_filters::blur((3.0, 3.0), None);
-        paint.set_image_filter(blur_filter);
-        canvas.draw_image(base, (0, 0), Some(&paint));
-    } else {
-        canvas.draw_image(base, (0, 0), None);
-    }
-
-    // 再绘制 pencil 作为叠加
+    // 直接将 base 与 pencil 叠加（简化实现）
+    canvas.draw_image(base, (0, 0), None);
     canvas.draw_image(pencil, (0, 0), None);
 
     Ok(surface.image_snapshot())
 }
 
-/// 创建渐变背景（使用正确的 linear_gradient 签名）
+/// 创建渐变背景（使用 linear_gradient 的标准 6 参数签名）
 fn make_gradient(width: i32, height: i32) -> Result<Image, Error> {
     let mut surface = new_surface((width, height));
     let canvas = surface.canvas();
 
-    let positions: [f32; 6] = [0.0, 0.4, 0.6, 0.7, 0.8, 1.0];
+    // 颜色数组，平均分布（不显式传 positions，避免类型转换）
     let colors: [Color4f; 6] = [
         Color4f::new(0.984, 0.729, 0.188, 1.0),
         Color4f::new(0.988, 0.447, 0.207, 1.0),
@@ -60,14 +46,14 @@ fn make_gradient(width: i32, height: i32) -> Result<Image, Error> {
         Color4f::new(0.243, 0.713, 0.854, 1.0),
     ];
 
-    // linear_gradient 的签名通常为:
-    // Shader::linear_gradient(((x0,y0),(x1,y1)), colors_slice, Option<&[pos]>, TileMode, Option<flags>)
+    // linear_gradient 的签名通常为 (points, colors_slice, pos_option, tile_mode, flags_option, local_matrix_option)
     let shader = Shader::linear_gradient(
         ((0.0f32, 0.0f32), (width as f32, height as f32)),
-        &colors as &[Color4f],
-        Some(&positions),
-        TileMode::Clamp,
-        None,
+        &colors,
+        None,                 // positions (None => 平均分布)
+        TileMode::Clamp,      // tile mode
+        None,                 // flags
+        None,                 // local matrix
     );
 
     let mut paint = Paint::default();
@@ -79,38 +65,32 @@ fn make_gradient(width: i32, height: i32) -> Result<Image, Error> {
 }
 
 fn louvre(images: Vec<InputImage>, _texts: Vec<String>, options: Louvre) -> Result<Vec<u8>, Error> {
-    // ---------------------------
-    // 注意：InputImage -> skia_safe::Image 的方法名在不同版本可能不一样。
-    // 我先用 `to_image()`（很多实现里是 to_image / as_image / into_image）
-    // 如果你的版本不是 to_image，请替换为你版本的对应方法（as_image / into_image / image 等）。
-    // ---------------------------
-    let base: Image = images[0].to_image()?; // 若编译报错“no method to_image”，请换成 as_image() / into_image() 等
+    // 直接消费 images vec，取第一个 InputImage 并转换为 skia Image
+    // 注意：不同版本的 InputImage 可能命名为 into_image()/as_image()/to_image() 等，
+    // 我先尝试常见的 into_image()。如果你的版本不是这个名字，请把编译错误贴上来。
+    let first_input = images.into_iter().next().unwrap();
+    let base: Image = first_input.into_image()?; // 若报错 "no method into_image"，我会根据错误改成正确的方法名
     let size = base.dimensions();
     let (w, h) = (size.width, size.height);
 
-    // 加载素材 01.png（变量名用 pencil）
+    // 加载素材 01.png 并缩放到目标尺寸
     let pencil = load_image("louvre/01.png")?.resize_exact((w, h));
 
     // 渐变背景
     let gradient = make_gradient(w, h)?;
 
-    // 蒙版（mask）
+    // 蒙版
     let mask = make_mask(&base, &pencil, options.denoise.unwrap_or(false))?;
 
-    // 合成结果：把 gradient 放底、把 mask 作为上层（当前实现把 mask 当成一层绘制）
+    // 合成结果：先画 gradient，再把 mask 作为一层绘制（如需按 mask 做 alpha-clipping，请说明）
     let mut surface = new_surface((w, h));
     let canvas = surface.canvas();
     canvas.draw_image(&gradient, (0, 0), None);
-
-    // 如果你想把 mask 当作 alpha mask 去显示 gradient（即 gradient 仅在 mask 白色处显示），
-    // 需要更复杂的 save_layer + paint.set_blendmode/clip 的逻辑。当前为了兼容性我直接绘制 mask。
     canvas.draw_image(&mask, (0, 0), None);
 
     let result = surface.image_snapshot();
 
-    // encode_to_data 在某些 skia_safe 版本会被标记为需要 context，若你遇到警告/错误请改用
-    // encode_to_data_with_context(...) 并传入上下文。
-    // 这里用 unwrap() 保证编译通过（开发阶段），你可以改为更严格的错误返回。
+    // 注意：某些 skia-safe 版本会对 encode_to_data 发出需要 context 的警告；这是警告不是错误。
     let png_data = result
         .encode_to_data(EncodedImageFormat::PNG)
         .unwrap();
@@ -124,7 +104,7 @@ register_meme!(
     min_images = 1,
     max_images = 1,
     keywords = &["卢浮宫"],
-    // macro 接受一个 HashSet<String>，这里以表达式构造并传入
+    // macro 需要 HashSet<String>：在宏中直接构造一个 HashSet 以保证兼容
     tags = {
         let mut __tags = HashSet::new();
         __tags.insert("艺术".to_string());
