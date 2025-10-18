@@ -53,41 +53,19 @@ fn make_sketch_effect(base: &Image, pencil: &Image) -> Result<Image, Error> {
     let size = base.dimensions();
     let (w, h) = (size.width, size.height);
     
-    // 步骤1: 创建灰度版本
+    // 步骤1: 创建灰度版本 - 使用混合模式模拟灰度效果
     let mut gray_surface = new_surface((w, h));
     let gray_canvas = gray_surface.canvas();
     
     // 使用luma颜色滤镜创建灰度效果
-    if let Some(luma_filter) = skia_safe::ColorFilter::luma() {
-        let mut paint = Paint::default();
-        paint.set_color_filter(luma_filter);
-        gray_canvas.draw_image(base, (0, 0), Some(&paint));
-    } else {
-        gray_canvas.draw_image(base, (0, 0), None);
-    }
+    let luma_filter = skia_safe::ColorFilter::luma();
+    let mut paint = Paint::default();
+    paint.set_color_filter(luma_filter);
+    gray_canvas.draw_image(base, (0, 0), Some(&paint));
     
     let gray_image = gray_surface.image_snapshot();
     
-    // 步骤2: 创建高对比度版本（模拟素描线条）
-    let mut high_contrast_surface = new_surface((w, h));
-    let high_contrast_canvas = high_contrast_surface.canvas();
-    
-    // 使用高对比度滤镜
-    let mut contrast_config = skia_safe::HighContrastConfig::default();
-    contrast_config.grayscale = true;
-    contrast_config.contrast = 1.5; // 高对比度
-    
-    if let Some(contrast_filter) = skia_safe::ColorFilter::high_contrast(&contrast_config) {
-        let mut paint = Paint::default();
-        paint.set_color_filter(contrast_filter);
-        high_contrast_canvas.draw_image(&gray_image, (0, 0), Some(&paint));
-    } else {
-        high_contrast_canvas.draw_image(&gray_image, (0, 0), None);
-    }
-    
-    let high_contrast_image = high_contrast_surface.image_snapshot();
-    
-    // 步骤3: 反转图像（素描效果）
+    // 步骤2: 创建反转版本（素描效果）
     let mut invert_surface = new_surface((w, h));
     let invert_canvas = invert_surface.canvas();
     
@@ -96,11 +74,11 @@ fn make_sketch_effect(base: &Image, pencil: &Image) -> Result<Image, Error> {
     
     let mut invert_paint = Paint::default();
     invert_paint.set_blend_mode(BlendMode::Difference);
-    invert_canvas.draw_image(&high_contrast_image, (0, 0), Some(&invert_paint));
+    invert_canvas.draw_image(&gray_image, (0, 0), Some(&invert_paint));
     
     let inverted = invert_surface.image_snapshot();
     
-    // 步骤4: 与铅笔纹理混合
+    // 步骤3: 与铅笔纹理混合
     let mut final_surface = new_surface((w, h));
     let final_canvas = final_surface.canvas();
     
